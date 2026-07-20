@@ -36,4 +36,4 @@ Un stage fullstack (dès septembre 2026) dans une structure **greentech**, où j
 
 ### 📫 Me contacter
 
-- 💼 [LinkedIn](#)
+- 💼 [LinkedIn](www.linkedin.com/in/francheska-charlot)
