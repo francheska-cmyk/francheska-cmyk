@@ -28,12 +28,6 @@ Une web app mobile-first pour aider au tri des déchets, avec une identité de m
 
 ---
 
-### 🎯 Ce que je recherche
-
-Un stage fullstack (dès septembre 2026) dans une structure **greentech**, où je peux mettre mon regard environnemental au service du développement web.
-
----
-
 ### 📫 Me contacter
 
 - 💼 [LinkedIn](https://www.linkedin.com/in/francheska-charlot)
