@@ -37,6 +37,5 @@ Un stage fullstack (dès septembre 2026) dans une structure **greentech**, où j
 ### 📫 Me contacter
 
 - 💼 [LinkedIn](#)
-- 📧 [email protected]
 
 <sub>*Complète les liens avant de publier — j'ai laissé des placeholders pour ton LinkedIn et ton email.*</sub>
