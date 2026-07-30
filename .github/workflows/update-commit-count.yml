@@ -1,0 +1,260 @@
+```yaml
+name: Update personal commit count
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Tous les jours à 08:00 UTC
+    # Soit 10:00 en France pendant l'heure d'été
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-personal-commit-count
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  update-commit-count:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout profile repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Synchronize profile repository
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout "$DEFAULT_BRANCH"
+          git reset --hard "origin/$DEFAULT_BRANCH"
+
+      - name: Count personal commits
+        env:
+          GH_TOKEN: ${{ secrets.GH_STATS_TOKEN }}
+          TARGET_USERNAME: ${{ vars.COMMIT_USERNAME }}
+          COMMIT_EMAILS: ${{ secrets.COMMIT_EMAILS }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::The GH_STATS_TOKEN secret is missing."
+            exit 1
+          fi
+
+          if [ -z "${TARGET_USERNAME:-}" ]; then
+            echo "::error::The COMMIT_USERNAME repository variable is missing."
+            exit 1
+          fi
+
+          WORK_DIR="$(mktemp -d)"
+          REPOS_DIR="$WORK_DIR/repos"
+          MATCHES_FILE="$WORK_DIR/matching-commits.txt"
+
+          mkdir -p "$REPOS_DIR"
+          touch "$MATCHES_FILE"
+
+          cleanup() {
+            rm -rf "$WORK_DIR"
+          }
+
+          trap cleanup EXIT
+
+          echo "Target GitHub account: $TARGET_USERNAME"
+          echo "Retrieving accessible repositories..."
+
+          gh api \
+            --paginate \
+            "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member" \
+            --jq '.[].full_name' \
+            | sort -u > "$WORK_DIR/repositories.txt"
+
+          REPOSITORY_COUNT="$(wc -l < "$WORK_DIR/repositories.txt" | tr -d ' ')"
+
+          echo "$REPOSITORY_COUNT accessible repositories found."
+          echo "--------------------------------------------------"
+
+          while IFS= read -r repository; do
+            [ -z "$repository" ] && continue
+
+            safe_name="$(printf '%s' "$repository" | tr '/:' '__')"
+            repository_path="$REPOS_DIR/$safe_name.git"
+
+            echo "Analyzing $repository"
+
+            # Un clone mirror récupère les branches et les tags.
+            # --filter=blob:none évite de télécharger le contenu des fichiers,
+            # puisque seuls les métadonnées des commits nous intéressent.
+            if gh repo clone "$repository" "$repository_path" -- \
+              --mirror \
+              --filter=blob:none \
+              --quiet
+            then
+              git \
+                --git-dir="$repository_path" \
+                log \
+                --all \
+                --format='%H%x09%ae' \
+                >> "$WORK_DIR/all-commits.txt"
+
+              rm -rf "$repository_path"
+            else
+              echo "::warning::Unable to clone $repository"
+            fi
+
+            echo "--------------------------------------------------"
+          done < "$WORK_DIR/repositories.txt"
+
+          if [ ! -s "$WORK_DIR/all-commits.txt" ]; then
+            echo "No commits could be retrieved."
+            echo "TOTAL_COMMITS=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          python3 - "$WORK_DIR/all-commits.txt" "$MATCHES_FILE" <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          source_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+
+          username = os.environ["TARGET_USERNAME"].strip().lower()
+          raw_emails = os.environ.get("COMMIT_EMAILS", "")
+
+          # Accepte les adresses séparées par des virgules,
+          # points-virgules, espaces ou retours à la ligne.
+          configured_emails = {
+              email.strip().lower()
+              for email in re.split(r"[,;\s]+", raw_emails)
+              if email.strip()
+          }
+
+          # Formats GitHub noreply possibles :
+          # username@users.noreply.github.com
+          # 12345678+username@users.noreply.github.com
+          noreply_pattern = re.compile(
+              rf"^(?:\d+\+)?{re.escape(username)}"
+              rf"@users\.noreply\.github\.com$",
+              re.IGNORECASE,
+          )
+
+          matching_commits: set[str] = set()
+
+          for line in source_path.read_text(
+              encoding="utf-8",
+              errors="replace",
+          ).splitlines():
+              try:
+                  commit_sha, author_email = line.split("\t", maxsplit=1)
+              except ValueError:
+                  continue
+
+              normalized_email = author_email.strip().lower()
+
+              if (
+                  normalized_email in configured_emails
+                  or noreply_pattern.fullmatch(normalized_email)
+              ):
+                  matching_commits.add(commit_sha)
+
+          output_path.write_text(
+              "\n".join(sorted(matching_commits)),
+              encoding="utf-8",
+          )
+
+          print(f"Configured email addresses: {len(configured_emails)}")
+          print(f"Unique matching commits: {len(matching_commits)}")
+          PY
+
+          TOTAL_COMMITS="$(wc -l < "$MATCHES_FILE" | tr -d ' ')"
+
+          # wc -l retourne 0 si le fichier contient une seule ligne
+          # sans saut de ligne final.
+          if [ -s "$MATCHES_FILE" ] && [ "$TOTAL_COMMITS" -eq 0 ]; then
+            TOTAL_COMMITS=1
+          fi
+
+          echo "TOTAL_COMMITS=$TOTAL_COMMITS"
+          echo "TOTAL_COMMITS=$TOTAL_COMMITS" >> "$GITHUB_ENV"
+
+      - name: Update README badge
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          total = os.environ.get("TOTAL_COMMITS", "0")
+
+          readme_path = Path("README.md")
+
+          if not readme_path.exists():
+              raise SystemExit("README.md was not found.")
+
+          content = readme_path.read_text(encoding="utf-8")
+
+          start_marker = "<!-- COMMIT-COUNT:START -->"
+          end_marker = "<!-- COMMIT-COUNT:END -->"
+
+          if start_marker not in content or end_marker not in content:
+              raise SystemExit(
+                  "Commit count markers were not found in README.md."
+              )
+
+          start_index = content.index(start_marker)
+          end_index = content.index(
+              end_marker,
+              start_index,
+          ) + len(end_marker)
+
+          badge = (
+              f"{start_marker}\n"
+              f"![Commits](https://img.shields.io/badge/"
+              f"Commits-{total}-F4A7B9"
+              f"?style=for-the-badge"
+              f"&logo=github"
+              f"&logoColor=white"
+              f"&cacheSeconds=3600)\n"
+              f"{end_marker}"
+          )
+
+          updated_content = (
+              content[:start_index]
+              + badge
+              + content[end_index:]
+          )
+
+          readme_path.write_text(
+              updated_content,
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Commit README update
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add README.md
+
+          if git diff --cached --quiet; then
+            echo "No README changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update personal commit count"
+          git push origin "HEAD:$DEFAULT_BRANCH"
