@@ -5,7 +5,7 @@
 Je termine actuellement un **Titre Professionnel Développeur Web et Web Mobile (RNCP 37674, Niveau 5)** chez ADRAR Formation à Toulouse, et je recherche un **stage fullstack pour septembre 2026**, idéalement dans le secteur **greentech**, à Toulouse ou Marseille.
 
 <!-- COMMIT-COUNT:START -->
-![Commits](https://img.shields.io/badge/Commits-216-F4A7B9?style=for-the-badge&logo=github&logoColor=white&cacheSeconds=3600)
+![Commits](https://img.shields.io/badge/Commits-218-F4A7B9?style=for-the-badge&logo=github&logoColor=white&cacheSeconds=3600)
 <!-- COMMIT-COUNT:END -->
 
 ---
